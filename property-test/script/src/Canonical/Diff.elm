@@ -397,6 +397,18 @@ normalizeExpression expr =
                     |> List.sortBy Tuple.first
                 )
 
+        -- Normalize: RecordAccess expr field → Application [RecordAccessFunction field, expr]
+        -- elm-format desugars record access to function application
+        CRecordAccess inner field ->
+            CApplication
+                [ CFunctionOrValue [] ("." ++ field)
+                , normalizeExpression inner
+                ]
+
+        -- Normalize: RecordAccessFunction → FunctionOrValue
+        CRecordAccessFunction field ->
+            CFunctionOrValue [] ("." ++ field)
+
         -- Recurse into subexpressions
         CApplication exprs ->
             CApplication (List.map normalizeExpression exprs)
@@ -422,9 +434,6 @@ normalizeExpression expr =
 
         CLambda args body ->
             CLambda (List.map normalizePattern args) (normalizeExpression body)
-
-        CRecordAccess inner field ->
-            CRecordAccess (normalizeExpression inner) field
 
         _ ->
             expr
