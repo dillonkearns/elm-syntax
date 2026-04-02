@@ -1,4 +1,4 @@
-module Generate.Expression exposing (generator)
+module Generate.Expression exposing (generator, topLevelGenerator)
 
 {-| Generate random Elm expression source strings.
 Depth parameter controls recursion to prevent infinite generation.
@@ -17,18 +17,35 @@ generator depth =
         leaf
 
     else
+        -- Separate "inline-safe" expressions (work anywhere) from
+        -- "block" expressions (need to be at the top of a function body
+        -- due to indentation requirements).
         Random.uniform leaf
             [ application depth
             , operatorExpr depth
             , ifExpr depth
-            , caseExpr depth
-            , letExpr depth
             , lambdaExpr depth
             , tupleExpr depth
             , listExpr depth
             , recordExpr depth
             , negation depth
             , parenExpr depth
+            ]
+            |> Random.andThen identity
+
+
+{-| Generate expressions suitable for a function body (top-level context).
+Includes let and case expressions that require specific indentation.
+-}
+topLevelGenerator : Int -> Generator String
+topLevelGenerator depth =
+    if depth <= 0 then
+        leaf
+
+    else
+        Random.uniform (generator depth)
+            [ caseExpr depth
+            , letExpr depth
             ]
             |> Random.andThen identity
 
@@ -129,13 +146,13 @@ caseExpr depth =
             Random.map2
                 (\pat body -> "        " ++ pat ++ " ->\n            " ++ body)
                 (Pattern.generator 0)
-                (generator (depth - 1))
+                leaf
     in
     Random.map2
         (\subject branches ->
             "case " ++ subject ++ " of\n" ++ String.join "\n\n" branches
         )
-        (generator (depth - 1))
+        leaf
         (Random.int 1 3
             |> Random.andThen (\n -> randomList n branch)
         )
@@ -149,7 +166,7 @@ letExpr depth =
             Random.map2
                 (\name body -> "        " ++ name ++ " =\n            " ++ body)
                 Identifier.lowerName
-                (generator (depth - 1))
+                (leaf)
     in
     Random.map2
         (\bindings body ->

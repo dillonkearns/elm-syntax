@@ -405,6 +405,18 @@ patternDecoder =
                                             CCharPattern ' '
                                 )
 
+                    "CharLiteral" ->
+                        D.field "value" D.string
+                            |> D.map
+                                (\s ->
+                                    case String.uncons s of
+                                        Just ( c, _ ) ->
+                                            CCharPattern c
+
+                                        Nothing ->
+                                            CCharPattern ' '
+                                )
+
                     "IntLiteralPattern" ->
                         D.field "value" D.int |> D.map CIntPattern
 

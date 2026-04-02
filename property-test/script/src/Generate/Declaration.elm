@@ -3,7 +3,7 @@ module Generate.Declaration exposing (generator)
 {-| Generate random Elm declaration source strings.
 -}
 
-import Generate.Expression as Expression
+import Generate.Expression as Expression exposing (topLevelGenerator)
 import Generate.Identifier as Identifier
 import Generate.TypeAnnotation as TypeAnnotation
 import Random exposing (Generator)
@@ -59,7 +59,7 @@ functionDecl depth =
                             Random.constant Nothing
                     )
             )
-            (Expression.generator depth)
+            (topLevelGenerator depth)
         )
 
 
