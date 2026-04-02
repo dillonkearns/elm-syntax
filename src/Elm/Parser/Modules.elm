@@ -6,7 +6,7 @@ import Elm.Parser.Layout as Layout
 import Elm.Parser.Tokens as Tokens
 import Elm.Syntax.Module exposing (Module(..))
 import Elm.Syntax.Node exposing (Node(..))
-import List.Extra
+import Elm.Internal.Extra as ListExtra
 import ParserFast exposing (Parser)
 import ParserWithComments exposing (WithComments)
 import Rope
@@ -52,11 +52,11 @@ whereBlock =
                 , syntax =
                     { command =
                         pairs
-                            |> List.Extra.find (\( fnName, _ ) -> fnName == "command")
+                            |> ListExtra.find (\( fnName, _ ) -> fnName == "command")
                             |> Maybe.map Tuple.second
                     , subscription =
                         pairs
-                            |> List.Extra.find (\( fnName, _ ) -> fnName == "subscription")
+                            |> ListExtra.find (\( fnName, _ ) -> fnName == "subscription")
                             |> Maybe.map Tuple.second
                     }
                 }

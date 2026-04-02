@@ -26,7 +26,7 @@ import Elm.Syntax.Type exposing (..)
 import Elm.Syntax.TypeAlias exposing (..)
 import Elm.Syntax.TypeAnnotation exposing (..)
 import Hex
-import List.Extra
+import Elm.Internal.Extra as ListExtra
 import StructuredWriter as Writer exposing (..)
 
 
@@ -164,7 +164,7 @@ writeExpose (Node _ exp) =
 
 startOnDifferentLines : List Range -> Bool
 startOnDifferentLines xs =
-    List.length (List.Extra.unique (List.map (.start >> .row) xs)) > 1
+    List.length (ListExtra.unique (List.map (.start >> .row) xs)) > 1
 
 
 writeImport : Import -> Writer

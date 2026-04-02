@@ -5,10 +5,11 @@ import BackendTask.Custom
 import Canonical exposing (CanonicalFile)
 import Canonical.Diff as Diff
 import Canonical.FromElmFormatJson
-import Canonical.FromElmSyntaxJson
+import Canonical.FromElmSyntax
 import Cli.Option as Option
 import Cli.OptionsParser as OptionsParser
 import Cli.Program as Program
+import Elm.Parser
 import FatalError exposing (FatalError)
 import Generate.Module as Module
 import Json.Decode as Decode
@@ -99,93 +100,81 @@ type TestResult
 
 compareSource : String -> String -> BackendTask FatalError TestResult
 compareSource moduleName source =
-    BackendTask.Custom.run "parseWithElmSyntax"
-        (Encode.string source)
-        Decode.value
-        |> BackendTask.allowFatal
-        |> BackendTask.andThen
-            (\elmSyntaxJson ->
-                let
-                    parsed =
-                        Decode.decodeValue (Decode.field "parsed" Decode.bool) elmSyntaxJson
-                            |> Result.withDefault False
-                in
-                if not parsed then
-                    -- elm-syntax couldn't parse it — not necessarily a bug,
-                    -- the generated source might be invalid
-                    Script.log ("  [skip] " ++ moduleName ++ " — elm-syntax parse failed")
-                        |> BackendTask.map (\_ -> Error "elm-syntax parse failed")
+    case Elm.Parser.parseToFile source of
+        Err _ ->
+            -- elm-syntax couldn't parse — check if elm-format can
+            BackendTask.Custom.run "parseWithElmFormat"
+                (Encode.string source)
+                Decode.value
+                |> BackendTask.allowFatal
+                |> BackendTask.andThen
+                    (\elmFormatJson ->
+                        let
+                            isNull =
+                                Decode.decodeValue (Decode.null True) elmFormatJson
+                                    |> Result.withDefault False
+                        in
+                        if isNull then
+                            Script.log ("  [skip] " ++ moduleName ++ " — both parsers failed")
+                                |> BackendTask.map (\_ -> Error "both parsers failed")
 
-                else
-                    BackendTask.Custom.run "parseWithElmFormat"
-                        (Encode.string source)
-                        Decode.value
-                        |> BackendTask.allowFatal
-                        |> BackendTask.andThen
-                            (\elmFormatJson ->
-                                let
-                                    isNull =
-                                        Decode.decodeValue (Decode.null True) elmFormatJson
-                                            |> Result.withDefault False
-                                in
-                                if isNull then
-                                    -- elm-format couldn't parse it either
-                                    Script.log ("  [skip] " ++ moduleName ++ " — both parsers failed")
-                                        |> BackendTask.map (\_ -> Error "both parsers failed")
-
-                                else
-                                    compareResults moduleName source elmSyntaxJson elmFormatJson
-                            )
-            )
-
-
-compareResults : String -> String -> Decode.Value -> Decode.Value -> BackendTask FatalError TestResult
-compareResults moduleName source elmSyntaxJson elmFormatJson =
-    let
-        elmSyntaxResult =
-            Decode.decodeValue Canonical.FromElmSyntaxJson.decoder elmSyntaxJson
-
-        elmFormatResult =
-            Decode.decodeValue Canonical.FromElmFormatJson.decoder elmFormatJson
-    in
-    case ( elmSyntaxResult, elmFormatResult ) of
-        ( Ok syntaxCanonical, Ok formatCanonical ) ->
-            let
-                diffs =
-                    Diff.diff syntaxCanonical formatCanonical
-            in
-            if List.isEmpty diffs then
-                Script.log ("  [pass] " ++ moduleName)
-                    |> BackendTask.map (\_ -> Pass)
-
-            else
-                Script.log
-                    ("\n  [FAIL] "
-                        ++ moduleName
-                        ++ "\nSource:\n"
-                        ++ source
-                        ++ "\nDiffs:\n"
-                        ++ Diff.formatDiff diffs
+                        else
+                            Script.log ("  [DISAGREE] " ++ moduleName ++ " — elm-syntax REJECTED but elm-format ACCEPTED")
+                                |> BackendTask.map (\_ -> Fail "elm-syntax rejected valid source")
                     )
-                    |> BackendTask.map (\_ -> Fail (Diff.formatDiff diffs))
 
-        ( Err syntaxErr, _ ) ->
-            Script.log
-                ("  [error] "
-                    ++ moduleName
-                    ++ " — elm-syntax JSON decode error: "
-                    ++ Decode.errorToString syntaxErr
-                )
-                |> BackendTask.map (\_ -> Error "elm-syntax decode error")
+        Ok file ->
+            let
+                syntaxCanonical : CanonicalFile
+                syntaxCanonical =
+                    Canonical.FromElmSyntax.fromFile file
+            in
+            BackendTask.Custom.run "parseWithElmFormat"
+                (Encode.string source)
+                Decode.value
+                |> BackendTask.allowFatal
+                |> BackendTask.andThen
+                    (\elmFormatJson ->
+                        let
+                            isNull =
+                                Decode.decodeValue (Decode.null True) elmFormatJson
+                                    |> Result.withDefault False
+                        in
+                        if isNull then
+                            Script.log ("  [DISAGREE] " ++ moduleName ++ " — elm-syntax ACCEPTED but elm-format REJECTED")
+                                |> BackendTask.map (\_ -> Fail "elm-syntax accepted invalid source")
 
-        ( _, Err formatErr ) ->
-            Script.log
-                ("  [error] "
-                    ++ moduleName
-                    ++ " — elm-format JSON decode error: "
-                    ++ Decode.errorToString formatErr
-                )
-                |> BackendTask.map (\_ -> Error "elm-format decode error")
+                        else
+                            case Decode.decodeValue Canonical.FromElmFormatJson.decoder elmFormatJson of
+                                Ok formatCanonical ->
+                                    let
+                                        diffs =
+                                            Diff.diff syntaxCanonical formatCanonical
+                                    in
+                                    if List.isEmpty diffs then
+                                        Script.log ("  [pass] " ++ moduleName)
+                                            |> BackendTask.map (\_ -> Pass)
+
+                                    else
+                                        Script.log
+                                            ("\n  [FAIL] "
+                                                ++ moduleName
+                                                ++ "\nSource:\n"
+                                                ++ source
+                                                ++ "\nDiffs:\n"
+                                                ++ Diff.formatDiff diffs
+                                            )
+                                            |> BackendTask.map (\_ -> Fail (Diff.formatDiff diffs))
+
+                                Err formatErr ->
+                                    Script.log
+                                        ("  [error] "
+                                            ++ moduleName
+                                            ++ " — elm-format JSON decode error: "
+                                            ++ Decode.errorToString formatErr
+                                        )
+                                        |> BackendTask.map (\_ -> Error "elm-format decode error")
+                    )
 
 
 type alias CliOptions =

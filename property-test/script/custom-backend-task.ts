@@ -2,32 +2,6 @@ import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
-// Load the compiled Elm worker (CommonJS output from elm make)
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-const workerPath = join(process.cwd(), "worker", "worker.cjs");
-const worker = require(workerPath);
-
-// Initialize the worker app once
-const workerApp = worker.Elm.ParseWorker.init();
-
-/**
- * Parse Elm source with the local elm-syntax parser (via compiled Elm worker).
- * Returns the elm-syntax JSON AST or a parse error.
- */
-export async function parseWithElmSyntax(
-  source: string
-): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
-    function handler(data: Record<string, unknown>) {
-      workerApp.ports.parseResult.unsubscribe(handler);
-      resolve(data);
-    }
-    workerApp.ports.parseResult.subscribe(handler);
-    workerApp.ports.requestParsing.send(source);
-  });
-}
-
 /**
  * Parse Elm source with elm-format --json (uses the real Elm compiler parser).
  * Returns the elm-format JSON AST or null if elm-format fails.

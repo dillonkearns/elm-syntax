@@ -1,4 +1,4 @@
-module List.Extra exposing
+module Elm.Internal.Extra exposing
     ( find
     , unique
     )
