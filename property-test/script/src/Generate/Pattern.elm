@@ -4,6 +4,7 @@ module Generate.Pattern exposing (generator)
 -}
 
 import Generate.Identifier as Identifier
+import Hex
 import Random exposing (Generator)
 
 
@@ -33,6 +34,7 @@ leaf =
         , intPattern
         , stringPattern
         , charPattern
+        , hexPattern
         ]
         |> Random.andThen identity
 
@@ -67,6 +69,11 @@ charPattern : Generator String
 charPattern =
     Random.uniform 'a' [ 'b', 'z', '0' ]
         |> Random.map (\c -> "'" ++ String.fromChar c ++ "'")
+
+
+hexPattern : Generator String
+hexPattern =
+    Random.int 0 255 |> Random.map (\n -> "0x" ++ String.toUpper (Hex.toString n))
 
 
 tuplePattern : Int -> Generator String

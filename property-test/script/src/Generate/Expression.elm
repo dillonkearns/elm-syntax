@@ -176,12 +176,30 @@ caseExpr depth =
 letExpr : Int -> Generator String
 letExpr depth =
     let
-        binding : Generator String
-        binding =
+        simpleBinding : Generator String
+        simpleBinding =
             Random.map2
                 (\name body -> "        " ++ name ++ " =\n            " ++ body)
                 Identifier.lowerName
-                (leaf)
+                leaf
+
+        destructuringBinding : Generator String
+        destructuringBinding =
+            Random.map2
+                (\pat body -> "        " ++ pat ++ " =\n            " ++ body)
+                (Random.uniform
+                    (Random.map2 (\a b -> "( " ++ a ++ ", " ++ b ++ " )") Identifier.lowerName Identifier.lowerName)
+                    [ Random.map (\names -> "{ " ++ String.join ", " names ++ " }")
+                        (Random.int 1 3 |> Random.andThen (\n -> randomList n Identifier.lowerName))
+                    ]
+                    |> Random.andThen identity
+                )
+                leaf
+
+        binding : Generator String
+        binding =
+            Random.uniform simpleBinding [ simpleBinding, simpleBinding, destructuringBinding ]
+                |> Random.andThen identity
     in
     Random.map2
         (\bindings body ->

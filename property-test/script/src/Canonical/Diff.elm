@@ -371,6 +371,11 @@ normalizeExpression expr =
                 (normalizeExpression thenBranch)
                 (normalizeExpression elseBranch)
 
+        -- Normalize: PrefixOperator → FunctionOrValue
+        -- elm-syntax uses PrefixOperator for (&&), (-) etc, elm-format uses FunctionOrValue
+        CPrefixOperator op ->
+            CFunctionOrValue [] op
+
         -- Normalize: Negation on non-numeric → keep as Negation
         -- (elm-format uses Application [PrefixOperator "-", x])
         CApplication [ CPrefixOperator "-", inner ] ->
