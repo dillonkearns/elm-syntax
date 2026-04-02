@@ -408,6 +408,12 @@ patternDecoder =
                     "IntLiteralPattern" ->
                         D.field "value" D.int |> D.map CIntPattern
 
+                    "IntLiteral" ->
+                        D.field "value" D.int |> D.map CIntPattern
+
+                    "FloatLiteral" ->
+                        D.field "value" D.float |> D.map CFloatPattern
+
                     "TuplePattern" ->
                         D.field "terms" (D.list (D.lazy (\_ -> patternDecoder)))
                             |> D.map CTuplePattern

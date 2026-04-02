@@ -18,8 +18,15 @@ type alias DiffItem =
 
 diff : CanonicalFile -> CanonicalFile -> List DiffItem
 diff a b =
-    diffModuleName "" a.moduleName b.moduleName
-        ++ diffDeclarationLists "declarations" a.declarations b.declarations
+    let
+        na =
+            normalizeFile a
+
+        nb =
+            normalizeFile b
+    in
+    diffModuleName "" na.moduleName nb.moduleName
+        ++ diffDeclarationLists "declarations" na.declarations nb.declarations
 
 
 diffModuleName : String -> List String -> List String -> List DiffItem
@@ -284,3 +291,200 @@ formatDiff items =
                 "  Path: " ++ item.path ++ "\n    elm-syntax: " ++ item.elmSyntax ++ "\n    elm-format: " ++ item.elmFormat
             )
         |> String.join "\n"
+
+
+
+-- NORMALIZATION
+-- These normalize known representational differences between parsers
+-- so that only real semantic differences show up as failures.
+
+
+normalizeFile : CanonicalFile -> CanonicalFile
+normalizeFile file =
+    { file | declarations = List.map normalizeDeclaration file.declarations }
+
+
+normalizeDeclaration : CanonicalDeclaration -> CanonicalDeclaration
+normalizeDeclaration decl =
+    case decl of
+        CanonicalFunction def ->
+            CanonicalFunction (normalizeFunctionDef def)
+
+        CanonicalTypeAlias def ->
+            CanonicalTypeAlias { def | definition = normalizeTypeAnnotation def.definition }
+
+        CanonicalCustomType def ->
+            CanonicalCustomType
+                { def
+                    | constructors =
+                        List.map
+                            (\c -> { c | arguments = List.map normalizeTypeAnnotation c.arguments })
+                            def.constructors
+                }
+
+        CanonicalPort def ->
+            CanonicalPort { def | typeAnnotation = normalizeTypeAnnotation def.typeAnnotation }
+
+        CanonicalDestructuring pat expr ->
+            CanonicalDestructuring (normalizePattern pat) (normalizeExpression expr)
+
+
+normalizeFunctionDef : CanonicalFunctionDef -> CanonicalFunctionDef
+normalizeFunctionDef def =
+    { def
+        | arguments = List.map normalizePattern def.arguments
+        , body = normalizeExpression def.body
+    }
+
+
+normalizeExpression : CanonicalExpression -> CanonicalExpression
+normalizeExpression expr =
+    case expr of
+        -- Normalize: Negation (CInt n) → CInt (-n)
+        -- elm-format folds negation into literal, elm-syntax keeps Negation node
+        CNegation (CInt n) ->
+            CInt (negate n)
+
+        CNegation (CFloat f) ->
+            CFloat (negate f)
+
+        -- Normalize: if/then/else ↔ case True/False
+        -- elm-format desugars if blocks to case on True/False
+        CCase subject [ ( CNamedPattern [] "True" [], thenBranch ), ( CNamedPattern [] "False" [], elseBranch ) ] ->
+            CIfBlock
+                (normalizeExpression subject)
+                (normalizeExpression thenBranch)
+                (normalizeExpression elseBranch)
+
+        -- Normalize: Negation on non-numeric → keep as Negation
+        -- (elm-format uses Application [PrefixOperator "-", x])
+        CApplication [ CPrefixOperator "-", inner ] ->
+            CNegation (normalizeExpression inner)
+
+        -- Sort record expression fields by name, deduplicate (keep last)
+        CRecordExpr fields ->
+            CRecordExpr
+                (fields
+                    |> List.map (\( n, e ) -> ( n, normalizeExpression e ))
+                    |> deduplicateKeepLast
+                    |> List.sortBy Tuple.first
+                )
+
+        CRecordUpdate name fields ->
+            CRecordUpdate name
+                (fields
+                    |> List.map (\( n, e ) -> ( n, normalizeExpression e ))
+                    |> List.sortBy Tuple.first
+                )
+
+        -- Recurse into subexpressions
+        CApplication exprs ->
+            CApplication (List.map normalizeExpression exprs)
+
+        CIfBlock cond then_ else_ ->
+            CIfBlock (normalizeExpression cond) (normalizeExpression then_) (normalizeExpression else_)
+
+        CNegation inner ->
+            CNegation (normalizeExpression inner)
+
+        CTuple exprs ->
+            CTuple (List.map normalizeExpression exprs)
+
+        CList exprs ->
+            CList (List.map normalizeExpression exprs)
+
+        CLet decls body ->
+            CLet (List.map normalizeLetDecl decls) (normalizeExpression body)
+
+        CCase subject branches ->
+            CCase (normalizeExpression subject)
+                (List.map (\( p, e ) -> ( normalizePattern p, normalizeExpression e )) branches)
+
+        CLambda args body ->
+            CLambda (List.map normalizePattern args) (normalizeExpression body)
+
+        CRecordAccess inner field ->
+            CRecordAccess (normalizeExpression inner) field
+
+        _ ->
+            expr
+
+
+normalizeLetDecl : CanonicalLetDeclaration -> CanonicalLetDeclaration
+normalizeLetDecl decl =
+    case decl of
+        CLetFunction def ->
+            CLetFunction (normalizeFunctionDef def)
+
+        CLetDestructuring pat expr ->
+            CLetDestructuring (normalizePattern pat) (normalizeExpression expr)
+
+
+normalizePattern : CanonicalPattern -> CanonicalPattern
+normalizePattern pat =
+    case pat of
+        CTuplePattern pats ->
+            CTuplePattern (List.map normalizePattern pats)
+
+        CConsPattern head tail ->
+            CConsPattern (normalizePattern head) (normalizePattern tail)
+
+        CListPattern pats ->
+            CListPattern (List.map normalizePattern pats)
+
+        CNamedPattern mod name args ->
+            CNamedPattern mod name (List.map normalizePattern args)
+
+        CAsPattern inner name ->
+            CAsPattern (normalizePattern inner) name
+
+        _ ->
+            pat
+
+
+normalizeTypeAnnotation : CanonicalTypeAnnotation -> CanonicalTypeAnnotation
+normalizeTypeAnnotation ta =
+    case ta of
+        CTyped mod name args ->
+            CTyped mod name (List.map normalizeTypeAnnotation args)
+
+        CTupleType types ->
+            CTupleType (List.map normalizeTypeAnnotation types)
+
+        CRecordType fields ->
+            CRecordType
+                (fields
+                    |> List.map (\( n, t ) -> ( n, normalizeTypeAnnotation t ))
+                    |> deduplicateKeepLast
+                )
+
+        CGenericRecordType var fields ->
+            CGenericRecordType var
+                (fields
+                    |> List.map (\( n, t ) -> ( n, normalizeTypeAnnotation t ))
+                    |> deduplicateKeepLast
+                )
+
+        CFunctionType from to ->
+            CFunctionType (normalizeTypeAnnotation from) (normalizeTypeAnnotation to)
+
+        _ ->
+            ta
+
+
+{-| Keep only the last occurrence of each key in a list of pairs.
+-}
+deduplicateKeepLast : List ( String, a ) -> List ( String, a )
+deduplicateKeepLast pairs =
+    -- foldr processes right-to-left, so later occurrences are seen first.
+    -- When we encounter an earlier duplicate, skip it (the later one is already in acc).
+    List.foldr
+        (\( k, v ) acc ->
+            if List.any (\( k2, _ ) -> k2 == k) acc then
+                acc
+
+            else
+                ( k, v ) :: acc
+        )
+        []
+        pairs
