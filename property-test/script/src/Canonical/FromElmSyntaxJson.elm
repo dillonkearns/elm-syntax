@@ -223,6 +223,9 @@ expressionDecoder_ =
                     "floatable" ->
                         D.field "floatable" D.float |> D.map CFloat
 
+                    "float" ->
+                        D.field "float" D.float |> D.map CFloat
+
                     "negation" ->
                         D.field "negation"
                             (nodeDecoder (D.lazy (\_ -> expressionDecoder_)))
@@ -316,7 +319,24 @@ expressionDecoder_ =
                             )
 
                     "recordAccessFunction" ->
-                        D.field "recordAccessFunction" D.string |> D.map CRecordAccessFunction
+                        D.field "recordAccessFunction" D.string
+                            |> D.map
+                                (\s ->
+                                    -- elm-syntax encodes as ".field", strip the leading dot
+                                    CRecordAccessFunction (String.dropLeft 1 s)
+                                )
+
+                    "record" ->
+                        D.field "record"
+                            (D.list
+                                (nodeDecoder
+                                    (D.map2 Tuple.pair
+                                        (D.field "field" (nodeDecoder D.string))
+                                        (D.field "expression" (nodeDecoder (D.lazy (\_ -> expressionDecoder_))))
+                                    )
+                                )
+                            )
+                            |> D.map CRecordExpr
 
                     "recordUpdate" ->
                         D.field "recordUpdate"

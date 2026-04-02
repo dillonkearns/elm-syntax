@@ -1,0 +1,251 @@
+module Generate.Expression exposing (generator)
+
+{-| Generate random Elm expression source strings.
+Depth parameter controls recursion to prevent infinite generation.
+-}
+
+import Generate.Identifier as Identifier
+import Generate.Pattern as Pattern
+import Random exposing (Generator)
+
+
+{-| Generate a random expression source string at a given depth.
+-}
+generator : Int -> Generator String
+generator depth =
+    if depth <= 0 then
+        leaf
+
+    else
+        Random.uniform leaf
+            [ application depth
+            , operatorExpr depth
+            , ifExpr depth
+            , caseExpr depth
+            , letExpr depth
+            , lambdaExpr depth
+            , tupleExpr depth
+            , listExpr depth
+            , recordExpr depth
+            , negation depth
+            , parenExpr depth
+            ]
+            |> Random.andThen identity
+
+
+leaf : Generator String
+leaf =
+    Random.uniform intLiteral
+        [ floatLiteral
+        , stringLiteral
+        , charLiteral
+        , unitLiteral
+        , variableRef
+        , recordAccessFn
+        ]
+        |> Random.andThen identity
+
+
+intLiteral : Generator String
+intLiteral =
+    Random.int -999 999 |> Random.map String.fromInt
+
+
+floatLiteral : Generator String
+floatLiteral =
+    Random.map2
+        (\whole frac ->
+            String.fromInt (abs whole) ++ "." ++ String.fromInt (abs frac)
+        )
+        (Random.int 0 999)
+        (Random.int 1 99)
+
+
+stringLiteral : Generator String
+stringLiteral =
+    Random.uniform "hello" [ "world", "foo", "bar", "", "test 123", "it's" ]
+        |> Random.map (\s -> "\"" ++ escapeString s ++ "\"")
+
+
+charLiteral : Generator String
+charLiteral =
+    Random.uniform 'a' [ 'b', 'z', '0', 'A', ' ', '!' ]
+        |> Random.map (\c -> "'" ++ escapeChar c ++ "'")
+
+
+unitLiteral : Generator String
+unitLiteral =
+    Random.constant "()"
+
+
+variableRef : Generator String
+variableRef =
+    Identifier.lowerName
+
+
+recordAccessFn : Generator String
+recordAccessFn =
+    Identifier.lowerName |> Random.map (\n -> "." ++ n)
+
+
+application : Int -> Generator String
+application depth =
+    Random.map2
+        (\fn arg -> fn ++ " " ++ arg)
+        Identifier.lowerName
+        (generator (depth - 1))
+
+
+operatorExpr : Int -> Generator String
+operatorExpr depth =
+    Random.map3
+        (\left op right -> left ++ " " ++ op ++ " " ++ right)
+        (generator (depth - 1))
+        operator
+        (generator (depth - 1))
+
+
+operator : Generator String
+operator =
+    Random.uniform "+" [ "-", "*", "//", "++", "::", "&&", "||", "==", "/=", "<", ">", "<=", ">=" ]
+
+
+ifExpr : Int -> Generator String
+ifExpr depth =
+    Random.map3
+        (\cond then_ else_ ->
+            "if " ++ cond ++ " then " ++ then_ ++ " else " ++ else_
+        )
+        (generator (depth - 1))
+        (generator (depth - 1))
+        (generator (depth - 1))
+
+
+caseExpr : Int -> Generator String
+caseExpr depth =
+    let
+        branch : Generator String
+        branch =
+            Random.map2
+                (\pat body -> "        " ++ pat ++ " ->\n            " ++ body)
+                (Pattern.generator 0)
+                (generator (depth - 1))
+    in
+    Random.map2
+        (\subject branches ->
+            "case " ++ subject ++ " of\n" ++ String.join "\n\n" branches
+        )
+        (generator (depth - 1))
+        (Random.int 1 3
+            |> Random.andThen (\n -> randomList n branch)
+        )
+
+
+letExpr : Int -> Generator String
+letExpr depth =
+    let
+        binding : Generator String
+        binding =
+            Random.map2
+                (\name body -> "        " ++ name ++ " =\n            " ++ body)
+                Identifier.lowerName
+                (generator (depth - 1))
+    in
+    Random.map2
+        (\bindings body ->
+            "let\n" ++ String.join "\n\n" bindings ++ "\n    in\n    " ++ body
+        )
+        (Random.int 1 3
+            |> Random.andThen (\n -> randomList n binding)
+        )
+        (generator (depth - 1))
+
+
+lambdaExpr : Int -> Generator String
+lambdaExpr depth =
+    Random.map2
+        (\args body ->
+            "\\" ++ String.join " " args ++ " -> " ++ body
+        )
+        (Random.int 1 3
+            |> Random.andThen (\n -> randomList n Identifier.lowerName)
+        )
+        (generator (depth - 1))
+
+
+tupleExpr : Int -> Generator String
+tupleExpr depth =
+    Random.int 2 3
+        |> Random.andThen
+            (\n -> randomList n (generator (depth - 1)))
+        |> Random.map
+            (\items -> "( " ++ String.join ", " items ++ " )")
+
+
+listExpr : Int -> Generator String
+listExpr depth =
+    Random.int 0 4
+        |> Random.andThen
+            (\n -> randomList n (generator (depth - 1)))
+        |> Random.map
+            (\items -> "[ " ++ String.join ", " items ++ " ]")
+
+
+recordExpr : Int -> Generator String
+recordExpr depth =
+    Random.int 1 4
+        |> Random.andThen
+            (\n ->
+                randomList n
+                    (Random.map2
+                        (\name val -> name ++ " = " ++ val)
+                        Identifier.lowerName
+                        (generator (depth - 1))
+                    )
+            )
+        |> Random.map
+            (\fields -> "{ " ++ String.join ", " fields ++ " }")
+
+
+negation : Int -> Generator String
+negation depth =
+    generator (depth - 1) |> Random.map (\e -> "-" ++ e)
+
+
+parenExpr : Int -> Generator String
+parenExpr depth =
+    generator (depth - 1) |> Random.map (\e -> "(" ++ e ++ ")")
+
+
+
+-- HELPERS
+
+
+escapeString : String -> String
+escapeString s =
+    s
+        |> String.replace "\\" "\\\\"
+        |> String.replace "\"" "\\\""
+        |> String.replace "\n" "\\n"
+
+
+escapeChar : Char -> String
+escapeChar c =
+    case c of
+        '\'' ->
+            "\\'"
+
+        '\\' ->
+            "\\\\"
+
+        _ ->
+            String.fromChar c
+
+
+randomList : Int -> Generator a -> Generator (List a)
+randomList n gen =
+    if n <= 0 then
+        Random.constant []
+
+    else
+        Random.map2 (::) gen (randomList (n - 1) gen)

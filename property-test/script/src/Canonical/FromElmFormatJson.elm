@@ -162,7 +162,19 @@ expressionDecoder =
                             |> D.map (CFunctionOrValue [])
 
                     "ExternalReference" ->
-                        D.map2 (\mod name -> CFunctionOrValue (String.split "." mod) name)
+                        D.map2
+                            (\mod name ->
+                                let
+                                    modParts =
+                                        String.split "." mod
+                                in
+                                -- Normalize: strip implicit module (e.g., Basics.True -> True)
+                                if modParts == [ "Basics" ] then
+                                    CFunctionOrValue [] name
+
+                                else
+                                    CFunctionOrValue modParts name
+                            )
                             (D.field "module" D.string)
                             (D.field "name" D.string)
 
@@ -174,6 +186,15 @@ expressionDecoder =
                         functionApplicationDecoder
 
                     "UnaryOperator" ->
+                        -- elm-format sometimes uses "term" and sometimes doesn't include
+                        -- the operand when it's a bare operator reference
+                        D.oneOf
+                            [ D.field "term" (D.lazy (\_ -> expressionDecoder))
+                                |> D.map CNegation
+                            , D.succeed (CPrefixOperator "-")
+                            ]
+
+                    "NegateExpression" ->
                         D.field "term" (D.lazy (\_ -> expressionDecoder))
                             |> D.map CNegation
 
@@ -205,7 +226,16 @@ expressionDecoder =
                             (D.field "patterns" (D.list (D.lazy (\_ -> patternDecoder))))
                             (D.field "body" (D.lazy (\_ -> expressionDecoder)))
 
+                    "AnonymousFunction" ->
+                        D.map2 CLambda
+                            (D.field "parameters" (D.list (D.lazy (\_ -> patternDecoder))))
+                            (D.field "body" (D.lazy (\_ -> expressionDecoder)))
+
                     "TupleExpression" ->
+                        D.field "terms" (D.list (D.lazy (\_ -> expressionDecoder)))
+                            |> D.map CTuple
+
+                    "TupleLiteral" ->
                         D.field "terms" (D.list (D.lazy (\_ -> expressionDecoder)))
                             |> D.map CTuple
 
@@ -213,10 +243,23 @@ expressionDecoder =
                         D.field "terms" (D.list (D.lazy (\_ -> expressionDecoder)))
                             |> D.map CList
 
+                    "ListLiteral" ->
+                        D.field "terms" (D.list (D.lazy (\_ -> expressionDecoder)))
+                            |> D.map CList
+
+                    "EmptyListLiteral" ->
+                        D.succeed (CList [])
+
                     "RecordExpression" ->
                         recordExprDecoder
 
+                    "RecordLiteral" ->
+                        recordExprDecoder
+
                     "RecordUpdateExpression" ->
+                        recordUpdateDecoder
+
+                    "RecordUpdate" ->
                         recordUpdateDecoder
 
                     "RecordAccessFunction" ->
@@ -288,6 +331,37 @@ recordExprDecoder =
         )
 
 
+constructorRefDecoder : Decoder ( List String, String )
+constructorRefDecoder =
+    D.field "tag" D.string
+        |> D.andThen
+            (\tag ->
+                case tag of
+                    "ConstructorReference" ->
+                        D.field "name" D.string
+                            |> D.map (\n -> ( [], n ))
+
+                    "ExternalReference" ->
+                        D.map2
+                            (\mod name ->
+                                let
+                                    modParts =
+                                        String.split "." mod
+                                in
+                                if modParts == [ "Basics" ] then
+                                    ( [], name )
+
+                                else
+                                    ( modParts, name )
+                            )
+                            (D.field "module" D.string)
+                            (D.field "identifier" D.string)
+
+                    other ->
+                        D.fail ("Unknown constructor ref tag: " ++ other)
+            )
+
+
 recordUpdateDecoder : Decoder CanonicalExpression
 recordUpdateDecoder =
     D.map2 CRecordUpdate
@@ -343,21 +417,9 @@ patternDecoder =
                             |> D.map (List.sort >> CRecordPattern)
 
                     "DataPattern" ->
-                        D.map3 (\mod name args -> CNamedPattern mod name args)
-                            (D.field "module"
-                                (D.nullable D.string
-                                    |> D.map
-                                        (\m ->
-                                            case m of
-                                                Just s ->
-                                                    String.split "." s
-
-                                                Nothing ->
-                                                    []
-                                        )
-                                )
-                            )
-                            (D.field "name" D.string)
+                        D.map2
+                            (\( mod, name ) args -> CNamedPattern mod name args)
+                            (D.field "constructor" constructorRefDecoder)
                             (D.field "arguments" (D.list (D.lazy (\_ -> patternDecoder))))
 
                     "ConsPattern" ->
@@ -400,7 +462,22 @@ typeAnnotationDecoder =
                         D.field "name" D.string |> D.map CGenericType
 
                     "TypeReference" ->
-                        D.map3 CTyped
+                        D.map3
+                            (\mod name args ->
+                                -- elm-format adds implicit module names for well-known types
+                                -- (Maybe, List, Result, etc.), but elm-syntax records what's
+                                -- written in source. Normalize by stripping module if it equals
+                                -- the type name (implicit import).
+                                let
+                                    normalizedMod =
+                                        if mod == [ name ] then
+                                            []
+
+                                        else
+                                            mod
+                                in
+                                CTyped normalizedMod name args
+                            )
                             (D.field "module"
                                 (D.nullable D.string
                                     |> D.map
@@ -425,9 +502,13 @@ typeAnnotationDecoder =
                         recordTypeDecoder
 
                     "FunctionType" ->
-                        D.map2 CFunctionType
+                        D.map2
+                            (\argTypes returnType ->
+                                -- elm-format gives argumentTypes as a list; build right-associative chain
+                                List.foldr CFunctionType returnType argTypes
+                            )
+                            (D.field "argumentTypes" (D.list (D.lazy (\_ -> typeAnnotationDecoder))))
                             (D.field "returnType" (D.lazy (\_ -> typeAnnotationDecoder)))
-                            (D.field "argumentType" (D.lazy (\_ -> typeAnnotationDecoder)))
 
                     other ->
                         D.fail ("Unknown type annotation tag: " ++ other)
