@@ -78,16 +78,45 @@ declarationDecoder =
 definitionDecoder : Decoder CanonicalDeclaration
 definitionDecoder =
     D.map4
-        (\name typeAnn args body ->
+        (\name ( paramTypes, returnType ) args body ->
+            let
+                -- Reconstruct full function type from parameter types + return type
+                -- e.g. parameters [{type: Int}, {type: String}] + returnType Bool
+                -- becomes Int -> String -> Bool
+                fullType =
+                    case returnType of
+                        Just rt ->
+                            Just (List.foldr CFunctionType rt paramTypes)
+
+                        Nothing ->
+                            Nothing
+            in
             CanonicalFunction
                 { name = name
-                , typeAnnotation = typeAnn
+                , typeAnnotation = fullType
                 , arguments = args
                 , body = body
                 }
         )
         (D.field "name" D.string)
-        (D.field "returnType" (D.nullable typeAnnotationDecoder))
+        (D.map2 Tuple.pair
+            (D.field "parameters"
+                (D.list
+                    (D.field "type" (D.nullable typeAnnotationDecoder)
+                        |> D.map (Maybe.withDefault CUnitType)
+                    )
+                )
+                |> D.map (List.filterMap
+                    (\t ->
+                        if t == CUnitType then
+                            -- null type means no annotation for this param
+                            Nothing
+                        else
+                            Just t
+                    ))
+            )
+            (D.field "returnType" (D.nullable typeAnnotationDecoder))
+        )
         (D.field "parameters"
             (D.list (D.field "pattern" patternDecoder))
         )
@@ -185,19 +214,10 @@ expressionDecoder =
                     "ExternalReference" ->
                         D.map2
                             (\mod name ->
-                                let
-                                    modParts =
-                                        String.split "." mod
-                                in
-                                -- Normalize: strip implicit module (e.g., Basics.True -> True)
-                                if modParts == [ "Basics" ] then
-                                    CFunctionOrValue [] name
-
-                                else
-                                    CFunctionOrValue modParts name
+                                CFunctionOrValue (normalizeImplicitModule (String.split "." mod) name) name
                             )
                             (D.field "module" D.string)
-                            (D.field "name" D.string)
+                            (D.field "identifier" D.string)
 
                     "ConstructorReference" ->
                         D.field "name" D.string
@@ -315,35 +335,62 @@ functionApplicationDecoder =
 
 letDeclarationDecoder : Decoder CanonicalLetDeclaration
 letDeclarationDecoder =
-    D.field "tag" D.string
-        |> D.andThen
-            (\tag ->
-                case tag of
-                    "Definition" ->
-                        D.map4
-                            (\name typeAnn args body ->
-                                CLetFunction
-                                    { name = name
-                                    , typeAnnotation = typeAnn
-                                    , arguments = args
-                                    , body = body
-                                    }
-                            )
-                            (D.field "name" D.string)
-                            (D.field "returnType" (D.nullable typeAnnotationDecoder))
-                            (D.field "parameters" (D.list (D.field "pattern" patternDecoder)))
-                            (D.field "expression" (D.lazy (\_ -> expressionDecoder)))
+    D.oneOf
+        [ D.field "tag" D.string |> D.andThen letDeclarationByTag
+        , -- Fallback for TODO nodes without proper tag
+          D.succeed (CLetDestructuring CAllPattern CUnit)
+        ]
 
-                    "Destructuring" ->
-                        D.map2 CLetDestructuring
-                            (D.field "pattern" (D.lazy (\_ -> patternDecoder)))
-                            (D.field "expression" (D.lazy (\_ -> expressionDecoder)))
 
-                    other ->
-                        D.fail ("Unknown let declaration tag: " ++ other)
+letDeclarationByTag : String -> Decoder CanonicalLetDeclaration
+letDeclarationByTag tag =
+    case tag of
+        "Definition" ->
+            letDefinitionBodyDecoder
+
+        "Destructuring" ->
+            D.map2 CLetDestructuring
+                (D.field "pattern" (D.lazy (\_ -> patternDecoder)))
+                (D.field "expression" (D.lazy (\_ -> expressionDecoder)))
+
+        _ ->
+            D.succeed (CLetDestructuring CAllPattern CUnit)
+
+
+letDefinitionBodyDecoder : Decoder CanonicalLetDeclaration
+letDefinitionBodyDecoder =
+    D.map4
+        (\name ( paramTypes, returnType ) args body ->
+            let
+                fullType =
+                    case returnType of
+                        Just rt ->
+                            Just (List.foldr CFunctionType rt paramTypes)
+
+                        Nothing ->
+                            Nothing
+            in
+            CLetFunction
+                { name = name
+                , typeAnnotation = fullType
+                , arguments = args
+                , body = body
+                }
+        )
+        (D.field "name" D.string)
+        (D.map2 Tuple.pair
+            (D.field "parameters"
+                (D.list
+                    (D.field "type" (D.nullable typeAnnotationDecoder)
+                        |> D.map (Maybe.withDefault CUnitType)
+                    )
+                )
+                |> D.map (List.filterMap (\ta -> if ta == CUnitType then Nothing else Just ta))
             )
-
-
+            (D.field "returnType" (D.nullable typeAnnotationDecoder))
+        )
+        (D.field "parameters" (D.list (D.field "pattern" patternDecoder)))
+        (D.field "expression" (D.lazy (\_ -> expressionDecoder)))
 recordExprDecoder : Decoder CanonicalExpression
 recordExprDecoder =
     D.field "fields"
@@ -365,15 +412,7 @@ constructorRefDecoder =
                     "ExternalReference" ->
                         D.map2
                             (\mod name ->
-                                let
-                                    modParts =
-                                        String.split "." mod
-                                in
-                                if modParts == [ "Basics" ] then
-                                    ( [], name )
-
-                                else
-                                    ( modParts, name )
+                                ( normalizeImplicitModule (String.split "." mod) name, name )
                             )
                             (D.field "module" D.string)
                             (D.field "identifier" D.string)
@@ -452,7 +491,14 @@ patternDecoder =
                             |> D.map CTuplePattern
 
                     "RecordPattern" ->
-                        D.field "fields" (D.list D.string)
+                        D.field "fields"
+                            (D.list
+                                (D.oneOf
+                                    [ D.field "name" D.string
+                                    , D.string
+                                    ]
+                                )
+                            )
                             |> D.map (List.sort >> CRecordPattern)
 
                     "DataPattern" ->
@@ -467,13 +513,31 @@ patternDecoder =
                             (D.field "tail" (D.lazy (\_ -> patternDecoder)))
 
                     "ListPattern" ->
-                        D.field "terms" (D.list (D.lazy (\_ -> patternDecoder)))
-                            |> D.map CListPattern
+                        -- elm-format uses ListPattern for both list literals and cons patterns
+                        -- { prefix: [...], rest: pattern|null }
+                        D.map2
+                            (\prefix maybeRest ->
+                                case maybeRest of
+                                    Just rest ->
+                                        -- Cons pattern: prefix :: rest
+                                        List.foldr CConsPattern rest prefix
+
+                                    Nothing ->
+                                        -- List literal pattern: [a, b, c]
+                                        CListPattern prefix
+                            )
+                            (D.field "prefix" (D.list (D.lazy (\_ -> patternDecoder))))
+                            (D.field "rest" (D.nullable (D.lazy (\_ -> patternDecoder))))
 
                     "AsPattern" ->
                         D.map2 CAsPattern
                             (D.field "pattern" (D.lazy (\_ -> patternDecoder)))
                             (D.field "name" D.string)
+
+                    "PatternAlias" ->
+                        D.map2 CAsPattern
+                            (D.field "pattern" (D.lazy (\_ -> patternDecoder)))
+                            (D.field "alias" (D.field "name" D.string))
 
                     "StringLiteral" ->
                         -- elm-format uses StringLiteral for string patterns in case branches
@@ -482,6 +546,30 @@ patternDecoder =
                     other ->
                         D.fail ("Unknown pattern tag: " ++ other)
             )
+
+
+
+{-| Strip implicit module names added by elm-format for auto-imported modules.
+The Elm compiler knows that Just comes from Maybe, True from Basics, etc.
+but elm-syntax records what's written in source (no module qualifier).
+-}
+normalizeImplicitModule : List String -> String -> List String
+normalizeImplicitModule moduleParts name =
+    case moduleParts of
+        [ single ] ->
+            if List.member single autoImportedModules then
+                []
+
+            else
+                moduleParts
+
+        _ ->
+            moduleParts
+
+
+autoImportedModules : List String
+autoImportedModules =
+    [ "Basics", "List", "Maybe", "Result", "String", "Char", "Tuple", "Debug", "Platform", "Cmd", "Sub" ]
 
 
 
@@ -503,19 +591,7 @@ typeAnnotationDecoder =
                     "TypeReference" ->
                         D.map3
                             (\mod name args ->
-                                -- elm-format adds implicit module names for well-known types
-                                -- (Maybe, List, Result, etc.), but elm-syntax records what's
-                                -- written in source. Normalize by stripping module if it equals
-                                -- the type name (implicit import).
-                                let
-                                    normalizedMod =
-                                        if mod == [ name ] then
-                                            []
-
-                                        else
-                                            mod
-                                in
-                                CTyped normalizedMod name args
+                                CTyped (normalizeImplicitModule mod name) name args
                             )
                             (D.field "module"
                                 (D.nullable D.string

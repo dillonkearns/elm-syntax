@@ -376,10 +376,18 @@ normalizeExpression expr =
         CPrefixOperator op ->
             CFunctionOrValue [] op
 
-        -- Normalize: Negation on non-numeric → keep as Negation
+        -- Normalize: Negation on non-numeric → fold if numeric, keep as Negation otherwise
         -- (elm-format uses Application [PrefixOperator "-", x])
         CApplication [ CPrefixOperator "-", inner ] ->
-            CNegation (normalizeExpression inner)
+            case normalizeExpression inner of
+                CInt n ->
+                    CInt (negate n)
+
+                CFloat f ->
+                    CFloat (negate f)
+
+                normalized ->
+                    CNegation normalized
 
         -- Sort record expression fields by name, deduplicate (keep last)
         CRecordExpr fields ->
@@ -426,7 +434,12 @@ normalizeExpression expr =
             CList (List.map normalizeExpression exprs)
 
         CLet decls body ->
-            CLet (List.map normalizeLetDecl decls) (normalizeExpression body)
+            CLet
+                (decls
+                    |> List.map normalizeLetDecl
+                    |> List.filter (not << isPlaceholderLetDecl)
+                )
+                (normalizeExpression body)
 
         CCase subject branches ->
             CCase (normalizeExpression subject)
@@ -447,6 +460,20 @@ normalizeLetDecl decl =
 
         CLetDestructuring pat expr ->
             CLetDestructuring (normalizePattern pat) (normalizeExpression expr)
+
+
+{-| Detect let-destructuring declarations that we can't compare.
+elm-format produces TODO nodes for destructuring patterns, so we skip
+all let-destructuring from both sides.
+-}
+isPlaceholderLetDecl : CanonicalLetDeclaration -> Bool
+isPlaceholderLetDecl decl =
+    case decl of
+        CLetDestructuring _ _ ->
+            True
+
+        _ ->
+            False
 
 
 normalizePattern : CanonicalPattern -> CanonicalPattern
