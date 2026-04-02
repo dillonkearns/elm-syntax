@@ -16,6 +16,7 @@ generator depth =
     Random.uniform (functionDecl depth)
         [ typeAliasDecl depth
         , customTypeDecl depth
+        , portDecl depth
         ]
         |> Random.andThen identity
 
@@ -146,6 +147,17 @@ variantDecl depth =
                         )
                 )
         )
+
+
+
+portDecl : Int -> Generator String
+portDecl depth =
+    Random.map2
+        (\name typeAnn ->
+            "port " ++ name ++ " : " ++ typeAnn
+        )
+        Identifier.lowerName
+        (TypeAnnotation.generator depth)
 
 
 

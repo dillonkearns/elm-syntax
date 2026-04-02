@@ -22,13 +22,14 @@ generator depth =
             , tupleType depth
             , recordType depth
             , functionType depth
+            , extensibleRecordType depth
             ]
             |> Random.andThen identity
 
 
 leaf : Generator String
 leaf =
-    Random.uniform "Int" [ "String", "Bool", "Float", "()" ]
+    Random.uniform "Int" [ "String", "Bool", "Float", "()", "a", "b", "comparable", "number" ]
 
 
 maybeType : Int -> Generator String
@@ -69,6 +70,26 @@ recordType depth =
                     )
             )
         |> Random.map (\fields -> "{ " ++ String.join ", " fields ++ " }")
+
+
+extensibleRecordType : Int -> Generator String
+extensibleRecordType depth =
+    Random.map2
+        (\var fields ->
+            "{ " ++ var ++ " | " ++ String.join ", " fields ++ " }"
+        )
+        (Random.uniform "a" [ "b", "r", "record" ])
+        (Random.int 1 3
+            |> Random.andThen
+                (\n ->
+                    randomList n
+                        (Random.map2
+                            (\name ta -> name ++ " : " ++ ta)
+                            Identifier.lowerName
+                            (generator (depth - 1))
+                        )
+                )
+        )
 
 
 functionType : Int -> Generator String

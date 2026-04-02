@@ -6,6 +6,7 @@ Depth parameter controls recursion to prevent infinite generation.
 
 import Generate.Identifier as Identifier
 import Generate.Pattern as Pattern
+import Hex
 import Random exposing (Generator)
 
 
@@ -30,6 +31,8 @@ generator depth =
             , recordExpr depth
             , negation depth
             , parenExpr depth
+            , recordAccessExpr depth
+            , recordUpdateExpr depth
             ]
             |> Random.andThen identity
 
@@ -59,6 +62,8 @@ leaf =
         , unitLiteral
         , variableRef
         , recordAccessFn
+        , hexLiteral
+        , prefixOperator
         ]
         |> Random.andThen identity
 
@@ -105,6 +110,16 @@ recordAccessFn =
     Identifier.lowerName |> Random.map (\n -> "." ++ n)
 
 
+hexLiteral : Generator String
+hexLiteral =
+    Random.int 0 4095 |> Random.map (\n -> "0x" ++ String.toUpper (Hex.toString n))
+
+
+prefixOperator : Generator String
+prefixOperator =
+    Random.uniform "(+)" [ "(-)", "(*)", "(//)", "(++)", "(::)", "(&&)", "(||)", "(==)", "(/=)" ]
+
+
 application : Int -> Generator String
 application depth =
     Random.map2
@@ -145,7 +160,7 @@ caseExpr depth =
         branch =
             Random.map2
                 (\pat body -> "        " ++ pat ++ " ->\n            " ++ body)
-                (Pattern.generator 0)
+                (Pattern.generator 1)
                 leaf
     in
     Random.map2
@@ -232,6 +247,34 @@ negation depth =
 parenExpr : Int -> Generator String
 parenExpr depth =
     generator (depth - 1) |> Random.map (\e -> "(" ++ e ++ ")")
+
+
+recordAccessExpr : Int -> Generator String
+recordAccessExpr depth =
+    Random.map2
+        (\expr field -> expr ++ "." ++ field)
+        Identifier.lowerName
+        Identifier.lowerName
+
+
+recordUpdateExpr : Int -> Generator String
+recordUpdateExpr depth =
+    Random.map2
+        (\name fields ->
+            "{ " ++ name ++ " | " ++ String.join ", " fields ++ " }"
+        )
+        Identifier.lowerName
+        (Random.int 1 3
+            |> Random.andThen
+                (\n ->
+                    randomList n
+                        (Random.map2
+                            (\fname val -> fname ++ " = " ++ val)
+                            Identifier.lowerName
+                            leaf
+                        )
+                )
+        )
 
 
 

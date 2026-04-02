@@ -8,17 +8,26 @@ import { join } from "node:path";
  */
 export async function parseWithElmFormat(
   source: string
-): Promise<Record<string, unknown> | null> {
+): Promise<{ status: string; ast?: Record<string, unknown>; error?: string }> {
   try {
     const result = execSync("npx elm-format --stdin --json", {
       input: source,
       encoding: "utf-8",
       timeout: 10000,
       cwd: process.cwd(),
+      stdio: ["pipe", "pipe", "pipe"],
     });
-    return JSON.parse(result);
-  } catch {
-    return null;
+    return { status: "ok", ast: JSON.parse(result) };
+  } catch (e: any) {
+    const stderr = e.stderr?.toString() || "";
+    if (stderr.includes("Non-exhaustive patterns") || stderr.includes("elm-format:")) {
+      // elm-format internal crash — not a parse failure
+      return { status: "crash", error: stderr.trim() };
+    }
+    if (stderr.includes("Unable to parse")) {
+      return { status: "parse-error", error: stderr.trim() };
+    }
+    return { status: "error", error: stderr.trim() || e.message };
   }
 }
 

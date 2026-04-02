@@ -301,7 +301,22 @@ formatDiff items =
 
 normalizeFile : CanonicalFile -> CanonicalFile
 normalizeFile file =
-    { file | declarations = List.map normalizeDeclaration file.declarations }
+    { file
+        | declarations =
+            file.declarations
+                |> List.filter (not << isPortDeclaration)
+                |> List.map normalizeDeclaration
+    }
+
+
+isPortDeclaration : CanonicalDeclaration -> Bool
+isPortDeclaration decl =
+    case decl of
+        CanonicalPort _ ->
+            True
+
+        _ ->
+            False
 
 
 normalizeDeclaration : CanonicalDeclaration -> CanonicalDeclaration

@@ -16,7 +16,18 @@ generator moduleName depth =
         |> Random.andThen (\n -> randomList n (Declaration.generator depth))
         |> Random.map
             (\decls ->
-                "module " ++ moduleName ++ " exposing (..)\n\n\n" ++ String.join "\n\n\n" decls ++ "\n"
+                let
+                    hasPort =
+                        List.any (String.startsWith "port ") decls
+
+                    header =
+                        if hasPort then
+                            "port module " ++ moduleName ++ " exposing (..)"
+
+                        else
+                            "module " ++ moduleName ++ " exposing (..)"
+                in
+                header ++ "\n\n\n" ++ String.join "\n\n\n" decls ++ "\n"
             )
 
 

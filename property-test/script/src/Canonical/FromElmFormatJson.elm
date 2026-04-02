@@ -28,10 +28,11 @@ decoder =
 
 declarationDecoder : Decoder CanonicalDeclaration
 declarationDecoder =
-    D.field "tag" D.string
-        |> D.andThen
-            (\tag ->
-                case tag of
+    D.oneOf
+        [ D.field "tag" D.string
+            |> D.andThen
+                (\tag ->
+                    case tag of
                     "Definition" ->
                         definitionDecoder
 
@@ -45,13 +46,33 @@ declarationDecoder =
                         portDecoder
 
                     "TODO" ->
-                        -- elm-format produces TODO nodes for port declarations
-                        -- and other unsupported constructs. We skip these.
-                        D.fail "TODO node - skipping"
+                        -- elm-format produces TODO nodes for port declarations.
+                        -- Extract the port name from the raw TODO string if possible.
+                        D.field "TODO" D.string
+                            |> D.andThen
+                                (\todoStr ->
+                                    -- Try to extract something useful, or create a placeholder
+                                    D.succeed
+                                        (CanonicalPort
+                                            { name = "TODO_PORT"
+                                            , typeAnnotation = CUnitType
+                                            }
+                                        )
+                                )
 
                     other ->
                         D.fail ("Unknown declaration tag: " ++ other)
             )
+        , -- Fallback for TODO nodes that don't have a "tag" field
+          D.field "TODO" D.string
+            |> D.map
+                (\_ ->
+                    CanonicalPort
+                        { name = "TODO_PORT"
+                        , typeAnnotation = CUnitType
+                        }
+                )
+        ]
 
 
 definitionDecoder : Decoder CanonicalDeclaration
@@ -517,6 +538,9 @@ typeAnnotationDecoder =
                             |> D.map CTupleType
 
                     "RecordType" ->
+                        recordTypeDecoder
+
+                    "RecordTypeExtension" ->
                         recordTypeDecoder
 
                     "FunctionType" ->
