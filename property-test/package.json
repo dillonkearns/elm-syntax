@@ -1,0 +1,14 @@
+{
+  "name": "elm-syntax-property-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "elm-pages run PropertyTest",
+    "build:worker": "cd worker && elm make src/ParseWorker.elm --output=worker.js && mv worker.js worker.cjs"
+  },
+  "devDependencies": {
+    "elm": "^0.19.1-6",
+    "elm-format": "^0.8.8",
+    "elm-pages": "^3.3.4"
+  }
+}

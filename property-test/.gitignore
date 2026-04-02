@@ -1,0 +1,7 @@
+node_modules/
+elm-stuff/
+generated/
+worker/worker.cjs
+worker/elm-stuff/
+script/.elm-pages/
+script/elm-stuff/
